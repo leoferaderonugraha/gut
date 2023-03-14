@@ -3,10 +3,36 @@ use cursive::{
     event::{EventResult, Key},
     traits::With,
     view::{scroll::Scroller, Scrollable},
-    views::{Button, Dialog, LinearLayout, OnEventView, Panel, TextView},
+    views::{Dialog, DummyView, LinearLayout, OnEventView, Panel, SelectView, TextView},
 };
 
+use crate::utils::pad_str;
 use cursive::traits::*;
+
+const SCREEN_WIDTH: usize = 100;
+const SCREEN_HEIGHT: usize = 30;
+const SCREEN_SIZE: (usize, usize) = (SCREEN_WIDTH, SCREEN_HEIGHT);
+const PAD_WIDTH: usize = 10;
+
+enum Menu {
+    Branch,
+    Stash,
+    CherryPick,
+    Status,
+    Log,
+    Quit,
+}
+
+fn menu_handler(cs: &mut cursive::Cursive, item: &Menu) {
+    match item {
+        Menu::Branch => git_branches(cs),
+        Menu::Stash => not_implemented(cs),
+        Menu::CherryPick => not_implemented(cs),
+        Menu::Status => git_status(cs),
+        Menu::Log => git_log(cs),
+        Menu::Quit => cs.quit(),
+    }
+}
 
 fn get_output(cmd: &[&str]) -> String {
     let pipe = std::process::Command::new("git")
@@ -19,49 +45,107 @@ fn get_output(cmd: &[&str]) -> String {
     return output;
 }
 
+fn switch_branch(s: &mut cursive::Cursive, branch: &str) {
+    let mut target_branch = branch.to_string();
+
+    if target_branch.starts_with('*') || target_branch.starts_with(' ') {
+        target_branch = target_branch[2..].to_string();
+    }
+
+    let cmd = vec!["checkout", target_branch.as_str()];
+    let output = get_output(&cmd);
+
+    let dialog = Dialog::text(output)
+        .button("Close", |s| {
+            s.pop_layer();
+            main_screen(s);
+        })
+        .fixed_size((50, 10));
+
+    s.add_layer(dialog);
+}
+
+fn not_implemented(s: &mut cursive::Cursive) {
+    let dialog = Dialog::text("Not implemented yet")
+        .button("Close", |s| {
+            s.pop_layer();
+            main_screen(s);
+        })
+        .fixed_size((50, 10));
+
+    s.add_layer(dialog);
+}
+
 pub fn main_screen(cs: &mut cursive::Cursive) {
     cs.pop_layer();
+    let title = "Gut - Git UI Tool";
 
-    let description = "Prototype of git wrapper";
-    let tv_description = TextView::new(description).fixed_size((50, 10));
+    let mut description = String::new();
+    let current_branch = get_output(&["branch", "--show-current"]);
 
-    let btn_git_test = Button::new("Branches", git_branches);
-    let btn_git_status = Button::new("Status", git_status);
-    let btn_quit = Button::new("Quit", |s| s.quit());
+    description.push_str(&format!("Current branch: {}\n", current_branch));
 
-    let buttons = LinearLayout::vertical()
-        .child(btn_git_test)
-        .child(btn_git_status)
-        .child(btn_quit);
+    // let description = get_output(&["log", "-1", "--pretty=%B"]);
+    description.push_str(get_output(&["status", "-su"]).as_str());
 
-    let dlg_left = Dialog::around(tv_description.fixed_size((50, 10)));
-    let dlg_right = Dialog::around(buttons.fixed_size((50, 10)));
+    let tv_description = TextView::new(&description).scrollable();
 
-    let main_dialog = Dialog::around(LinearLayout::horizontal().child(dlg_left).child(dlg_right))
-        .title("Main Menu");
+    let mut menu = SelectView::<Menu>::new().on_submit(&menu_handler);
+
+    menu.add_item(pad_str("BRANCH", PAD_WIDTH), Menu::Branch);
+    menu.add_item(pad_str("STASH", PAD_WIDTH), Menu::Stash);
+    menu.add_item(pad_str("CHERRY-PICK", PAD_WIDTH), Menu::CherryPick);
+    menu.add_item(pad_str("STATUS", PAD_WIDTH), Menu::Status);
+    menu.add_item(pad_str("LOG", PAD_WIDTH), Menu::Log);
+    menu.add_item(pad_str("QUIT", PAD_WIDTH), Menu::Quit);
+
+    let buttons = LinearLayout::vertical().child(DummyView).child(menu);
+
+    let dlg_left_title = get_output(&["rev-parse", "--show-toplevel"]);
+    let dlg_left = Dialog::around(tv_description)
+        .title(dlg_left_title.trim())
+        .full_width();
+    let dlg_right_title = "Menu";
+    let dlg_right = Dialog::around(buttons)
+        .title(dlg_right_title)
+        .title_position(HAlign::Center);
+
+    let content = LinearLayout::horizontal()
+        .child(dlg_left)
+        .child(DummyView)
+        .child(dlg_right);
+
+    let main_dialog = Dialog::around(content)
+        .title(title)
+        .h_align(HAlign::Center)
+        .fixed_size(SCREEN_SIZE);
 
     cs.add_layer(main_dialog);
 }
 
 fn git_branches(cs: &mut cursive::Cursive) {
     cs.pop_layer();
-    let title = "Git Branches";
 
-    let mut output = get_output(&["branch", "-a"]);
+    let title = "Git Branches";
+    let cmd = vec!["branch", "-l"];
+    let mut output = get_output(&cmd);
 
     if output.trim().is_empty() {
-        output = "No branches found".to_string();
+        output = "No branch(es) found".to_string();
     }
 
-    let tv_output = TextView::new(output).scrollable();
+    let select = SelectView::<String>::new()
+        .with(|s| {
+            for line in output.lines() {
+                s.add_item(line, line.to_string());
+            }
+        })
+        .on_submit(switch_branch);
 
-    let dialog = Dialog::around(Panel::new(tv_output))
+    let dialog = Dialog::around(select)
         .title(title)
-        .h_align(HAlign::Center)
-        .button("Close", |s| {
-            s.pop_layer();
-            main_screen(s);
-        });
+        .button("Back", main_screen)
+        .fixed_size(SCREEN_SIZE);
 
     cs.add_layer(dialog);
 }
@@ -70,7 +154,8 @@ fn git_status(cs: &mut cursive::Cursive) {
     cs.pop_layer();
 
     let title = "Git Status";
-    let output = get_output(&["status"]);
+    let cmd = vec!["status"];
+    let output = get_output(&cmd);
 
     let text_view = TextView::new(&output)
         .scrollable()
@@ -95,10 +180,32 @@ fn git_status(cs: &mut cursive::Cursive) {
     let dialog = Dialog::around(Panel::new(text_view))
         .title(title)
         .h_align(HAlign::Center)
-        .button("Close", |s| {
+        .button("Back", |s| {
             s.pop_layer();
             main_screen(s);
-        });
+        })
+        .fixed_size(SCREEN_SIZE);
+
+    cs.add_layer(dialog);
+}
+
+fn git_log(cs: &mut cursive::Cursive) {
+    cs.pop_layer();
+
+    let title = "Git Log";
+    let cmd = vec!["log", "--oneline", "--decorate", "--graph"];
+    let output = get_output(&cmd);
+
+    let tv_output = TextView::new(output).scrollable();
+
+    let dialog = Dialog::around(Panel::new(tv_output))
+        .title(title)
+        .h_align(HAlign::Center)
+        .button("Back", |s| {
+            s.pop_layer();
+            main_screen(s);
+        })
+        .fixed_size(SCREEN_SIZE);
 
     cs.add_layer(dialog);
 }
