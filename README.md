@@ -1,2 +1,2 @@
 # GUT
-Terminal User Interface (TUI) wrapper for git
+Text-based User Interface (TUI) wrapper for git
